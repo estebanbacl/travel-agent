@@ -70,36 +70,60 @@ class ClaudeService(PlanGenerator):
             d.dayNumber = i
 
 
+_MOCK_CATALOG = {
+    "food": [("Market breakfast and coffee", "Start slowly at a busy local market: fresh pastries, strong coffee and people-watching.", 0.04),
+             ("Street-food crawl", "Graze through the neighborhood's best stalls, three or four small tastings instead of one big meal.", 0.07),
+             ("Dinner at a family-run restaurant", "A long, relaxed dinner built around regional specialties and the house wine.", 0.12)],
+    "museums": [("Main city museum", "Go early to beat the crowds and focus on the two or three galleries you care about most.", 0.08),
+                ("Small gallery and courtyard cafe", "A quieter, lesser-known collection followed by coffee in the courtyard.", 0.05),
+                ("Late-opening exhibition", "Evening hours mean thinner crowds and a different light on the work.", 0.06)],
+    "hiking": [("Sunrise trail to the viewpoint", "A moderate climb that rewards you with the best panorama of the area.", 0.02),
+               ("Riverside or coastal walk", "Flat, scenic path with plenty of places to stop and swim or picnic.", 0.01),
+               ("Golden-hour ridge walk", "Short evening hike timed for sunset; bring a light jacket.", 0.01)],
+}
+_MOCK_GENERIC = [
+    ("Old town walking tour", "Wander the historic center with a local guide who knows the stories behind the buildings.", 0.06),
+    ("Neighborhood lunch and a stroll", "Pick a busy lunch spot away from the main square, then explore the side streets.", 0.08),
+    ("Sunset viewpoint and dinner", "Catch the sunset from the best lookout in town, then eat nearby.", 0.1),
+]
+_MOCK_PLACES = ["Old Town", "Central Market", "Riverfront", "Arts District", "Hilltop Park", "Harbor Quarter"]
+
+
 class MockService(PlanGenerator):
     """Deterministic offline generator so the app runs without an API key."""
 
     def generate(self, req: TravelRequest) -> GeneratedPlan:
         per_day = req.totalBudget / req.durationDays
+        interests = [i.lower() for i in req.interests] or [""]
         days = []
         for n in range(1, req.durationDays + 1):
-            theme = (req.interests[(n - 1) % len(req.interests)] if req.interests else "Highlights").title()
-            slots = ["Morning", "Afternoon", "Evening"]
-            acts = [
-                {
-                    "timeSlot": s,
-                    "title": f"{theme} stop {i + 1}",
-                    "description": f"Mock {s.lower()} activity in {req.destination}.",
-                    "estimatedCost": round(per_day * 0.08, 2),
-                    "locationName": f"{req.destination} spot {n}.{i + 1}",
-                }
-                for i, s in enumerate(slots)
-            ]
+            key = interests[(n - 1) % len(interests)]
+            options = _MOCK_CATALOG.get(key, _MOCK_GENERIC)
+            acts = []
+            for i, slot in enumerate(["Morning", "Afternoon", "Evening"]):
+                title, desc, share = options[i]
+                place = _MOCK_PLACES[(n + i) % len(_MOCK_PLACES)]
+                acts.append(
+                    {
+                        "timeSlot": slot,
+                        "title": title,
+                        "description": desc,
+                        "estimatedCost": round(per_day * share, 2),
+                        "locationName": f"{place}, {req.destination}",
+                    }
+                )
             routes = [
                 {
                     "fromLocation": acts[i]["locationName"],
                     "toLocation": acts[i + 1]["locationName"],
                     "travelMode": "walk" if i == 0 else "transit",
-                    "estimatedDurationMinutes": 15 + 5 * i,
+                    "estimatedDurationMinutes": 12 + 8 * i,
                     "estimatedCost": 0 if i == 0 else round(per_day * 0.02, 2),
                 }
                 for i in range(2)
             ]
-            days.append({"dayNumber": n, "theme": f"{theme} in {req.destination}", "activities": acts, "routes": routes})
+            theme = key.title() if key else "Highlights"
+            days.append({"dayNumber": n, "theme": f"{theme} day in {req.destination}", "activities": acts, "routes": routes})
         return GeneratedPlan.model_validate(
             {
                 "destination": req.destination,

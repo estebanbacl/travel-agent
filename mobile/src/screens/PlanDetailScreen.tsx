@@ -1,110 +1,155 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, Switch, View } from 'react-native';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../App';
 import { api } from '../api/client';
-import type { TravelPlan } from '../api/types';
-import { Button, Card, Field } from '../components/ui';
-import { colors, money } from '../theme';
+import type { ActivityItem, RouteSegment, TravelPlan } from '../api/types';
+import { BudgetBar } from '../components/BudgetBar';
+import { TripBanner } from '../components/TripBanner';
+import { Banner, Button, Card, Field, Chip, Screen, Skeleton, StatusBadge, T, confirmAction } from '../components/ui';
+import { money, useTheme } from '../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PlanDetail'>;
 
+const SLOT_ICON: Record<ActivityItem['timeSlot'], keyof typeof Feather.glyphMap> = { Morning: 'sunrise', Afternoon: 'sun', Evening: 'moon' };
+const MODE_ICON: Record<RouteSegment['travelMode'], keyof typeof MaterialCommunityIcons.glyphMap> = { walk: 'walk', transit: 'bus', taxi: 'taxi', drive: 'car' };
+const QUICK = ['Make it cheaper', 'More outdoor activities', 'Add local food spots', 'Slower pace, fewer stops'];
+
 export default function PlanDetailScreen({ route, navigation }: Props) {
+  const t = useTheme();
   const { id } = route.params;
   const [plan, setPlan] = useState<TravelPlan | null>(null);
+  const [day, setDay] = useState(1);
   const [instruction, setInstruction] = useState('');
-  const [dayText, setDayText] = useState('');
+  const [onlyThisDay, setOnlyThisDay] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getPlan(id).then(setPlan).catch((e) => Alert.alert('Error', e.message));
+    api.getPlan(id).then(setPlan).catch((e) => setError(e.message));
   }, [id]);
 
-  if (!plan) return <Text style={{ padding: 16 }}>Loading…</Text>;
-  const cur = plan.request.currency;
-  const b = plan.breakdown;
+  if (!plan) {
+    return (
+      <Screen>
+        {error ? <Banner message={error} /> : <><Skeleton h={120} /><Skeleton h={24} w="60%" style={{ marginTop: 16 }} /><Skeleton h={160} style={{ marginTop: 16 }} /></>}
+      </Screen>
+    );
+  }
 
-  const refine = async () => {
-    const day = dayText ? parseInt(dayText, 10) : undefined;
-    if (day !== undefined && !(day >= 1 && day <= plan.totalDays)) {
-      Alert.alert('Day out of range', `Pick a day from 1 to ${plan.totalDays}, or leave empty.`);
-      return;
-    }
+  const cur = plan.request.currency;
+  const d = plan.days.find((x) => x.dayNumber === day) ?? plan.days[0];
+
+  const refine = async (text = instruction) => {
+    if (text.trim().length < 3) return;
     setBusy(true);
+    setError(null);
     try {
-      setPlan(await api.refinePlan(id, instruction.trim(), day));
+      setPlan(await api.refinePlan(id, text.trim(), onlyThisDay ? d.dayNumber : undefined));
       setInstruction('');
     } catch (e) {
-      Alert.alert('Could not refine', (e as Error).message);
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
   const remove = () =>
-    Alert.alert('Delete trip?', undefined, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => { await api.deletePlan(id); navigation.goBack(); } },
-    ]);
+    confirmAction('Delete this trip?', async () => {
+      try { await api.deletePlan(id); navigation.goBack(); } catch (e) { setError((e as Error).message); }
+    });
 
   return (
-    <ScrollView style={{ backgroundColor: colors.bg }} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
-      <Text style={s.h1}>{plan.destination}</Text>
-      <Card>
-        <Row k="Accommodation" v={money(b.accommodation, cur)} />
-        <Row k="Food" v={money(b.food, cur)} />
-        <Row k="Activities" v={money(b.activities, cur)} />
-        <Row k="Transit" v={money(b.transit, cur)} />
-        <Row k="Total" v={money(b.total, cur)} bold />
-        <Row k="Budget" v={money(b.budget, cur)} />
-        <Text style={{ color: colors[plan.budgetStatus], marginTop: 6 }}>
-          {plan.budgetStatus.replace('_', ' ')} ({b.variance >= 0 ? '+' : ''}{money(b.variance, cur)})
-        </Text>
-      </Card>
-
-      {plan.days.map((d) => (
-        <Card key={d.dayNumber}>
-          <Text style={s.h2}>Day {d.dayNumber} · {d.theme}</Text>
-          {d.activities.map((a, i) => (
-            <View key={i} style={{ marginTop: 8 }}>
-              <Text style={s.slot}>{a.timeSlot}</Text>
-              <Text style={s.bold}>{a.title} — {money(a.estimatedCost, cur)}</Text>
-              <Text style={s.muted}>{a.locationName}</Text>
-              <Text style={{ color: colors.text }}>{a.description}</Text>
+    <Screen>
+      <Card style={{ marginBottom: 16 }}>
+        <TripBanner destination={plan.destination} subtitle={`${plan.totalDays} days · ${plan.request.travelStyle}`} height={132} big />
+        <View style={{ padding: 18, gap: 16 }}>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'flex-end', gap: 12 }}>
+            <View>
+              <T v="label" color="muted" style={{ textTransform: 'uppercase' }}>Estimated total</T>
+              <T v="display">{money(plan.totalEstimatedCost, cur)}</T>
             </View>
-          ))}
-          {d.routes.map((r, i) => (
-            <Text key={i} style={[s.muted, { marginTop: 6 }]}>
-              ➜ {r.travelMode} {r.estimatedDurationMinutes} min, {r.fromLocation} → {r.toLocation} ({money(r.estimatedCost, cur)})
-            </Text>
-          ))}
-          <Text style={[s.bold, { marginTop: 8 }]}>Day total: {money(d.dailyCostTotal, cur)}</Text>
-        </Card>
-      ))}
-
-      <Card>
-        <Text style={s.h2}>Adjust this plan</Text>
-        <Field label="What should change?" value={instruction} onChangeText={setInstruction} placeholder="Make day 2 cheaper" multiline />
-        <Field label="Only day (optional)" value={dayText} onChangeText={setDayText} keyboardType="number-pad" />
-        <Button title="Apply change" onPress={refine} loading={busy} disabled={instruction.trim().length < 3} />
+            <View style={{ alignItems: 'flex-start', gap: 6 }}>
+              <StatusBadge status={plan.budgetStatus} />
+              <T v="small" color="muted">
+                {plan.breakdown.variance >= 0 ? '+' : '−'}{money(Math.abs(plan.breakdown.variance), cur)} vs {money(plan.breakdown.budget, cur)} budget
+              </T>
+            </View>
+          </View>
+          <BudgetBar b={plan.breakdown} currency={cur} />
+        </View>
       </Card>
-      <Button title="Delete trip" onPress={remove} />
-    </ScrollView>
+
+      {error && <Banner message={error} onClose={() => setError(null)} />}
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingVertical: 8 }}>
+        {plan.days.map((x) => <Chip key={x.dayNumber} label={`Day ${x.dayNumber}`} selected={x.dayNumber === d.dayNumber} onPress={() => setDay(x.dayNumber)} />)}
+      </ScrollView>
+
+      <View style={{ marginTop: 12, marginBottom: 6 }}>
+        <T v="h1">{d.theme}</T>
+        <T color="muted">Day total {money(d.dailyCostTotal, cur)}</T>
+      </View>
+
+      <View style={{ marginTop: 14 }}>
+        {d.activities.map((a, i) => {
+          const r = d.routes[i];
+          return (
+            <View key={i}>
+              <View style={{ flexDirection: 'row', gap: 14 }}>
+                <View style={{ alignItems: 'center', width: 32 }}>
+                  <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: t.surfaceAlt, borderWidth: 1, borderColor: t.border, alignItems: 'center', justifyContent: 'center' }}>
+                    <Feather name={SLOT_ICON[a.timeSlot]} size={15} color={t.text} />
+                  </View>
+                  {i < d.activities.length - 1 && <View style={{ flex: 1, width: 1, backgroundColor: t.border, marginVertical: 4 }} />}
+                </View>
+                <View style={{ flex: 1, paddingBottom: 12 }}>
+                  <T v="label" color="muted" style={{ textTransform: 'uppercase' }}>{a.timeSlot}</T>
+                  <Card style={{ padding: 14, marginTop: 6 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12 }}>
+                      <T v="h2" style={{ flex: 1 }}>{a.title}</T>
+                      <T v="h3" color="muted">{a.estimatedCost > 0 ? money(a.estimatedCost, cur) : 'Free'}</T>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginVertical: 4 }}>
+                      <Feather name="map-pin" size={12} color={t.accent} />
+                      <T v="small" style={{ color: t.accent }}>{a.locationName}</T>
+                    </View>
+                    <T color="muted">{a.description}</T>
+                  </Card>
+                  {r && i < d.activities.length - 1 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12, paddingLeft: 2 }}>
+                      <MaterialCommunityIcons name={MODE_ICON[r.travelMode]} size={16} color={t.muted} />
+                      <T v="small" color="muted">
+                        {r.estimatedDurationMinutes} min {r.travelMode === 'walk' ? 'walk' : r.travelMode} · {r.estimatedCost > 0 ? money(r.estimatedCost, cur) : 'Free'}
+                      </T>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+
+      <Card style={{ padding: 18, marginTop: 20 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+          <Feather name="message-circle" size={16} color={t.text} />
+          <T v="h2">Ask the agent to adjust</T>
+        </View>
+        <T v="small" color="muted" style={{ marginBottom: 12 }}>Describe what you'd change and the plan will be rebalanced.</T>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+          {QUICK.map((q) => <Chip key={q} label={q} onPress={() => !busy && refine(q)} />)}
+        </View>
+        <Field label="" value={instruction} onChangeText={setInstruction} placeholder="e.g. Swap the museum for something outdoors" multiline editable={!busy} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+          <Switch value={onlyThisDay} onValueChange={setOnlyThisDay} />
+          <T v="small" color="muted">Only change Day {d.dayNumber}</T>
+        </View>
+        <Button title={busy ? 'Updating plan…' : 'Apply change'} icon="refresh-cw" onPress={() => refine()} loading={busy} disabled={instruction.trim().length < 3} />
+      </Card>
+
+      <Button title="Delete trip" variant="danger" icon="trash-2" onPress={remove} style={{ marginTop: 16 }} />
+    </Screen>
   );
 }
-
-const Row = ({ k, v, bold }: { k: string; v: string; bold?: boolean }) => (
-  <View style={s.row}>
-    <Text style={bold ? s.bold : s.muted}>{k}</Text>
-    <Text style={bold ? s.bold : { color: colors.text }}>{v}</Text>
-  </View>
-);
-
-const s = StyleSheet.create({
-  h1: { fontSize: 24, fontWeight: '700', marginBottom: 12, color: colors.text },
-  h2: { fontSize: 16, fontWeight: '600', color: colors.text },
-  slot: { color: colors.primary, fontSize: 12, fontWeight: '600', textTransform: 'uppercase' },
-  bold: { fontWeight: '600', color: colors.text },
-  muted: { color: colors.muted },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
-});
