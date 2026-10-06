@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "AI Travel Planner",
+    "slug": "travel-agent-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "extra": { "apiUrl": "http://localhost:8000", "apiKey": "" }
+  }
+}
